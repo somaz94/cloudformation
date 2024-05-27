@@ -78,6 +78,69 @@ Resources:
       SubnetId: !Ref PublicSubnet2
       RouteTableId: !Ref PublicRouteTable
 
+  # NAT Gateway for Private Subnets
+  NatGatewayEIP:
+    Type: 'AWS::EC2::EIP'
+    Properties:
+      Domain: 'vpc'
+
+  NatGateway:
+    Type: 'AWS::EC2::NatGateway'
+    Properties:
+      AllocationId: !GetAtt NatGatewayEIP.AllocationId
+      SubnetId: !Ref PublicSubnet1  # Assuming NAT Gateway is placed in the first public subnet
+
+  PrivateRouteTable:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref VPC
+
+  PrivateRoute:
+    Type: 'AWS::EC2::Route'
+    DependsOn: NatGateway
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  PrivateSubnet1RouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnet2RouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable
+  # Security Group
+  MySecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: 'Enable SSH access and internal communication'
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: 'tcp'
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 'YOUR_PUBLIC_IP/32'  # Replace YOUR_PUBLIC_IP with your actual public IP address
+        - IpProtocol: 'tcp'
+          FromPort: 22
+          ToPort: 22
+          SourceSecurityGroupId: !Ref MySecurityGroup
+        - IpProtocol: 'tcp'
+          FromPort: 8080
+          ToPort: 8080
+          SourceSecurityGroupId: !Ref MySecurityGroup
+        - IpProtocol: 'tcp'
+          FromPort: 2049
+          ToPort: 2049
+          SourceSecurityGroupId: !Ref MySecurityGroup
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: '0.0.0.0/0'
+
 Outputs:
   VPC:
     Value: !Ref VPC
@@ -91,3 +154,23 @@ Outputs:
     Value: !Ref PublicSubnet2
     Export:
       Name: !Sub '${ProjectName}-${ENV}-PublicSubnet2'
+  PrivateSubnet1:
+    Value: !Ref PrivateSubnet1
+    Export:
+      Name: !Sub '${ProjectName}-${ENV}-PrivateSubnet1'
+  PrivateSubnet2:
+    Value: !Ref PrivateSubnet2
+    Export:
+      Name: !Sub '${ProjectName}-${ENV}-PrivateSubnet2'
+  InternetGateway:
+    Value: !Ref InternetGateway
+    Export:
+      Name: !Sub '${ProjectName}-${ENV}-InternetGateway'
+  NatGateway:
+    Value: !Ref NatGateway
+    Export:
+      Name: !Sub '${ProjectName}-${ENV}-NatGateway'
+  MySecurityGroup:
+    Value: !Ref MySecurityGroup
+    Export:
+      Name: !Sub '${ProjectName}-${ENV}-MySecurityGroup'
