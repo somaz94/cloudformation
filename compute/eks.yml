@@ -1,0 +1,162 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description:
+  'EKS Cluster with Managed Node Group IaC'
+
+Parameters:
+  ProjectName:
+    Type: String
+  ENV:
+    Type: String
+    AllowedValues:
+      - dev
+      - prod
+  NodeInstanceType:
+    Type: String
+    Default: t3.medium
+    AllowedValues:
+      - t3.medium
+      - t3.large
+      - t3.xlarge
+
+Conditions:
+  IsProd: !Equals [!Ref ENV, 'prod']
+
+Resources:
+  # EKS Cluster IAM Role
+  EKSClusterRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${ENV}-eks-cluster-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [eks.amazonaws.com]
+            Action: ['sts:AssumeRole']
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
+        - arn:aws:iam::aws:policy/AmazonEKSVPCResourceController
+
+  # EKS Cluster Security Group
+  EKSClusterSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub '${ProjectName}-${ENV}-eks-cluster-sg'
+      VpcId: {'Fn::ImportValue': !Sub '${ProjectName}-${ENV}-VPC'}
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${ENV}-eks-cluster-sg'
+
+  # EKS Cluster
+  EKSCluster:
+    Type: AWS::EKS::Cluster
+    Properties:
+      Name: !Sub '${ProjectName}-${ENV}-eks-cluster'
+      Version: '1.31'
+      RoleArn: !GetAtt EKSClusterRole.Arn
+      ResourcesVpcConfig:
+        SecurityGroupIds:
+          - !Ref EKSClusterSecurityGroup
+        SubnetIds:
+          - {'Fn::ImportValue': !Sub '${ProjectName}-${ENV}-PrivateSubnet1'}
+          - {'Fn::ImportValue': !Sub '${ProjectName}-${ENV}-PrivateSubnet2'}
+          - {'Fn::ImportValue': !Sub '${ProjectName}-${ENV}-PublicSubnet1'}
+          - {'Fn::ImportValue': !Sub '${ProjectName}-${ENV}-PublicSubnet2'}
+        EndpointPublicAccess: true
+        EndpointPrivateAccess: true
+      Logging:
+        ClusterLogging:
+          EnabledTypes:
+            - Type: api
+            - Type: audit
+            - Type: authenticator
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${ENV}-eks-cluster'
+        - Key: Environment
+          Value: !Ref ENV
+
+  # Node Group IAM Role
+  NodeGroupRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${ENV}-eks-nodegroup-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [ec2.amazonaws.com]
+            Action: ['sts:AssumeRole']
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
+        - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+
+  # Managed Node Group
+  NodeGroup:
+    Type: AWS::EKS::Nodegroup
+    DependsOn: EKSCluster
+    Properties:
+      NodegroupName: !Sub '${ProjectName}-${ENV}-nodegroup'
+      ClusterName: !Ref EKSCluster
+      NodeRole: !GetAtt NodeGroupRole.Arn
+      InstanceTypes:
+        - !Ref NodeInstanceType
+      ScalingConfig:
+        MinSize: !If [IsProd, 2, 1]
+        MaxSize: !If [IsProd, 5, 3]
+        DesiredSize: !If [IsProd, 2, 1]
+      Subnets:
+        - {'Fn::ImportValue': !Sub '${ProjectName}-${ENV}-PrivateSubnet1'}
+        - {'Fn::ImportValue': !Sub '${ProjectName}-${ENV}-PrivateSubnet2'}
+      AmiType: AL2023_x86_64_STANDARD
+      CapacityType: !If [IsProd, 'ON_DEMAND', 'SPOT']
+      Labels:
+        environment: !Ref ENV
+        project: !Ref ProjectName
+      Tags:
+        Name: !Sub '${ProjectName}-${ENV}-nodegroup'
+        Environment: !Ref ENV
+
+  # OIDC Provider for IRSA (IAM Roles for Service Accounts)
+  OIDCProvider:
+    Type: AWS::IAM::OIDCIdentityProvider
+    DependsOn: EKSCluster
+    Properties:
+      Url: !GetAtt EKSCluster.OpenIdConnectIssuerUrl
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        - '9e99a48a9960b14926bb7f3b02e22da2b0ab7280'
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${ENV}-eks-oidc-provider'
+
+Outputs:
+  ClusterName:
+    Description: EKS cluster name
+    Value: !Ref EKSCluster
+    Export:
+      Name: !Sub '${ProjectName}-${ENV}-EKSClusterName'
+  ClusterEndpoint:
+    Description: EKS cluster API server endpoint
+    Value: !GetAtt EKSCluster.Endpoint
+    Export:
+      Name: !Sub '${ProjectName}-${ENV}-EKSClusterEndpoint'
+  OIDCProviderArn:
+    Description: ARN of the OIDC identity provider for IRSA
+    Value: !GetAtt OIDCProvider.Arn
+    Export:
+      Name: !Sub '${ProjectName}-${ENV}-OIDCProviderArn'

@@ -1,0 +1,65 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: SQS main queue with dead-letter queue, SSE-SQS encryption, and configurable retention.
+
+Parameters:
+  ProjectName:
+    Type: String
+  ENV:
+    Type: String
+    AllowedValues:
+      - dev
+      - prod
+
+Conditions:
+  IsProd: !Equals [!Ref ENV, "prod"]
+
+Resources:
+  DeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${ProjectName}-${ENV}-dlq"
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref ENV
+
+  MainQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${ProjectName}-${ENV}-queue"
+      VisibilityTimeout: 300
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt DeadLetterQueue.Arn
+        maxReceiveCount: 3
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref ENV
+
+Outputs:
+  QueueUrl:
+    Description: Main queue URL
+    Value: !Ref MainQueue
+    Export:
+      Name: !Sub "${ProjectName}-${ENV}-queue-url"
+  QueueArn:
+    Description: Main queue ARN
+    Value: !GetAtt MainQueue.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${ENV}-queue-arn"
+  DLQUrl:
+    Description: Dead-letter queue URL
+    Value: !Ref DeadLetterQueue
+    Export:
+      Name: !Sub "${ProjectName}-${ENV}-dlq-url"
+  DLQArn:
+    Description: Dead-letter queue ARN
+    Value: !GetAtt DeadLetterQueue.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${ENV}-dlq-arn"

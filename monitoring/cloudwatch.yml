@@ -1,0 +1,232 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudWatch Alarms and Dashboard
+
+Parameters:
+  ProjectName:
+    Type: String
+    Description: Project name for resource naming
+  ENV:
+    Type: String
+    AllowedValues:
+      - dev
+      - prod
+    Description: Environment name
+  AlarmEmail:
+    Type: String
+    Description: Email address for alarm notifications
+    Default: ''
+  ECSClusterName:
+    Type: String
+    Description: ECS Cluster name to monitor
+    Default: ''
+  RDSClusterIdentifier:
+    Type: String
+    Description: RDS Cluster identifier to monitor
+    Default: ''
+
+Conditions:
+  IsProd: !Equals [!Ref ENV, 'prod']
+  HasAlarmEmail: !Not [!Equals [!Ref AlarmEmail, '']]
+  HasECSCluster: !Not [!Equals [!Ref ECSClusterName, '']]
+  HasRDSCluster: !Not [!Equals [!Ref RDSClusterIdentifier, '']]
+
+Resources:
+  # SNS Topic for alarm notifications
+  AlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${ProjectName}-${ENV}-alarm-topic'
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref ENV
+
+  AlarmEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasAlarmEmail
+    Properties:
+      TopicArn: !Ref AlarmTopic
+      Protocol: email
+      Endpoint: !Ref AlarmEmail
+
+  # ECS CPU Utilization Alarm
+  ECSCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasECSCluster
+    Properties:
+      AlarmName: !Sub '${ProjectName}-${ENV}-ecs-cpu-high'
+      AlarmDescription: ECS CPU utilization exceeds 80%
+      Namespace: AWS/ECS
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: ClusterName
+          Value: !Ref ECSClusterName
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref AlarmTopic
+      OKActions:
+        - !Ref AlarmTopic
+      TreatMissingData: notBreaching
+
+  # ECS Memory Utilization Alarm
+  ECSMemoryAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasECSCluster
+    Properties:
+      AlarmName: !Sub '${ProjectName}-${ENV}-ecs-memory-high'
+      AlarmDescription: ECS memory utilization exceeds 80%
+      Namespace: AWS/ECS
+      MetricName: MemoryUtilization
+      Dimensions:
+        - Name: ClusterName
+          Value: !Ref ECSClusterName
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref AlarmTopic
+      TreatMissingData: notBreaching
+
+  # RDS CPU Utilization Alarm
+  RDSCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasRDSCluster
+    Properties:
+      AlarmName: !Sub '${ProjectName}-${ENV}-rds-cpu-high'
+      AlarmDescription: RDS CPU utilization exceeds 80%
+      Namespace: AWS/RDS
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: DBClusterIdentifier
+          Value: !Ref RDSClusterIdentifier
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref AlarmTopic
+      TreatMissingData: notBreaching
+
+  # RDS Free Storage Alarm
+  RDSStorageAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasRDSCluster
+    Properties:
+      AlarmName: !Sub '${ProjectName}-${ENV}-rds-storage-low'
+      AlarmDescription: RDS free storage below 5GB
+      Namespace: AWS/RDS
+      MetricName: FreeLocalStorage
+      Dimensions:
+        - Name: DBClusterIdentifier
+          Value: !Ref RDSClusterIdentifier
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5368709120  # 5GB in bytes
+      ComparisonOperator: LessThanThreshold
+      AlarmActions:
+        - !Ref AlarmTopic
+      TreatMissingData: notBreaching
+
+  # Dashboard
+  Dashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub '${ProjectName}-${ENV}-dashboard'
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "text",
+              "x": 0,
+              "y": 0,
+              "width": 24,
+              "height": 1,
+              "properties": {
+                "markdown": "# ${ProjectName} ${ENV} Dashboard"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 1,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  ["AWS/ECS", "CPUUtilization", "ClusterName", "${ECSClusterName}"]
+                ],
+                "period": 300,
+                "stat": "Average",
+                "region": "${AWS::Region}",
+                "title": "ECS CPU Utilization"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 1,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  ["AWS/ECS", "MemoryUtilization", "ClusterName", "${ECSClusterName}"]
+                ],
+                "period": 300,
+                "stat": "Average",
+                "region": "${AWS::Region}",
+                "title": "ECS Memory Utilization"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 7,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  ["AWS/RDS", "CPUUtilization", "DBClusterIdentifier", "${RDSClusterIdentifier}"]
+                ],
+                "period": 300,
+                "stat": "Average",
+                "region": "${AWS::Region}",
+                "title": "RDS CPU Utilization"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 7,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  ["AWS/RDS", "DatabaseConnections", "DBClusterIdentifier", "${RDSClusterIdentifier}"]
+                ],
+                "period": 300,
+                "stat": "Sum",
+                "region": "${AWS::Region}",
+                "title": "RDS Database Connections"
+              }
+            }
+          ]
+        }
+
+Outputs:
+  AlarmTopicArn:
+    Description: SNS Topic ARN for alarms
+    Value: !Ref AlarmTopic
+    Export:
+      Name: !Sub '${ProjectName}-${ENV}-AlarmTopicArn'
+  DashboardName:
+    Description: CloudWatch Dashboard name
+    Value: !Ref Dashboard

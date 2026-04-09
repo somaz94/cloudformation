@@ -1,0 +1,75 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: SNS topic with encryption, email subscription, optional SQS subscription, and CloudWatch alarm publishing policy.
+
+Parameters:
+  ProjectName:
+    Type: String
+  ENV:
+    Type: String
+    AllowedValues:
+      - dev
+      - prod
+  NotificationEmail:
+    Type: String
+    Description: Email address for SNS notifications
+  SQSQueueArn:
+    Type: String
+    Description: ARN of the SQS queue for subscription (leave empty to skip)
+    Default: ""
+
+Conditions:
+  IsProd: !Equals [!Ref ENV, "prod"]
+  HasSQSSubscription: !Not [!Equals [!Ref SQSQueueArn, ""]]
+
+Resources:
+  SNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${ProjectName}-${ENV}-topic"
+      KmsMasterKeyId: alias/aws/sns
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref ENV
+
+  SNSTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+        - !Ref SNSTopic
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowCloudWatchAlarms
+            Effect: Allow
+            Principal:
+              Service: cloudwatch.amazonaws.com
+            Action: sns:Publish
+            Resource: !Ref SNSTopic
+            Condition:
+              ArnLike:
+                aws:SourceArn: !Sub "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:*"
+
+  EmailSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref SNSTopic
+      Protocol: email
+      Endpoint: !Ref NotificationEmail
+
+  SQSSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasSQSSubscription
+    Properties:
+      TopicArn: !Ref SNSTopic
+      Protocol: sqs
+      Endpoint: !Ref SQSQueueArn
+      RawMessageDelivery: true
+
+Outputs:
+  TopicArn:
+    Description: SNS topic ARN
+    Value: !Ref SNSTopic
+    Export:
+      Name: !Sub "${ProjectName}-${ENV}-sns-topic-arn"

@@ -1,0 +1,97 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description:
+  'Route53 Hosted Zone and DNS Records IaC'
+
+Parameters:
+  ProjectName:
+    Type: String
+  ENV:
+    Type: String
+    AllowedValues:
+      - dev
+      - prod
+  DomainName:
+    Type: String
+    Description: 'Root domain name (e.g. example.com)'
+  EnableCloudFrontAlias:
+    Type: String
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Description: 'Enable A record alias to CloudFront distribution'
+  EnableMXRecord:
+    Type: String
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Description: 'Enable MX record for email'
+  MXValue:
+    Type: String
+    Default: '10 mail.example.com'
+    Description: 'MX record value (priority and mail server)'
+
+Conditions:
+  IsProd: !Equals [!Ref ENV, 'prod']
+  HasCloudFrontAlias: !Equals [!Ref EnableCloudFrontAlias, 'true']
+  HasMXRecord: !Equals [!Ref EnableMXRecord, 'true']
+
+Resources:
+  # Public Hosted Zone
+  HostedZone:
+    Type: AWS::Route53::HostedZone
+    Properties:
+      Name: !Ref DomainName
+      HostedZoneConfig:
+        Comment: !Sub '${ProjectName}-${ENV} hosted zone for ${DomainName}'
+
+  # A Record - Alias to CloudFront Distribution (optional)
+  CloudFrontAliasRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasCloudFrontAlias
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: !Ref DomainName
+      Type: A
+      AliasTarget:
+        DNSName:
+          Fn::ImportValue: !Sub '${ProjectName}-${ENV}-DomainName'
+        # CloudFront hosted zone ID is always Z2FDTNDATAQYW2
+        HostedZoneId: Z2FDTNDATAQYW2
+        EvaluateTargetHealth: false
+
+  # CNAME Record - www subdomain pointing to root domain
+  WwwCnameRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: !Sub 'www.${DomainName}'
+      Type: CNAME
+      TTL: !If [IsProd, '300', '60']
+      ResourceRecords:
+        - !Ref DomainName
+
+  # MX Record (optional)
+  MXRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasMXRecord
+    Properties:
+      HostedZoneId: !Ref HostedZone
+      Name: !Ref DomainName
+      Type: MX
+      TTL: !If [IsProd, '3600', '300']
+      ResourceRecords:
+        - !Ref MXValue
+
+Outputs:
+  HostedZoneId:
+    Value: !Ref HostedZone
+    Export:
+      Name: !Sub '${ProjectName}-${ENV}-HostedZoneId'
+  NameServers:
+    Value: !Join
+      - ','
+      - !GetAtt HostedZone.NameServers
+    Description: 'Name servers for the hosted zone'

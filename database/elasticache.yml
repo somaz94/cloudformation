@@ -1,0 +1,82 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: ElastiCache Redis replication group with conditional failover and node sizing.
+
+Parameters:
+  ProjectName:
+    Type: String
+  ENV:
+    Type: String
+    AllowedValues:
+      - dev
+      - prod
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID for the subnet group and security group
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Subnet IDs for the ElastiCache subnet group
+
+Conditions:
+  IsProd: !Equals [!Ref ENV, "prod"]
+
+Resources:
+  RedisSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${ProjectName}-${ENV}-redis-sg"
+      GroupDescription: !Sub "Security group for ${ProjectName}-${ENV} Redis"
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 6379
+          ToPort: 6379
+          CidrIp: 10.0.0.0/8
+          Description: Allow Redis access from internal network
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${ENV}-redis-sg"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref ENV
+
+  RedisSubnetGroup:
+    Type: AWS::ElastiCache::SubnetGroup
+    Properties:
+      CacheSubnetGroupName: !Sub "${ProjectName}-${ENV}-redis-subnet-group"
+      Description: !Sub "Subnet group for ${ProjectName}-${ENV} Redis"
+      SubnetIds: !Ref SubnetIds
+
+  RedisReplicationGroup:
+    Type: AWS::ElastiCache::ReplicationGroup
+    Properties:
+      ReplicationGroupId: !Sub "${ProjectName}-${ENV}-redis"
+      ReplicationGroupDescription: !Sub "${ProjectName}-${ENV} Redis replication group"
+      Engine: redis
+      EngineVersion: "7.1"
+      CacheNodeType: !If [IsProd, cache.r6g.large, cache.t3.micro]
+      NumCacheClusters: !If [IsProd, 2, 1]
+      AutomaticFailoverEnabled: !If [IsProd, true, false]
+      CacheSubnetGroupName: !Ref RedisSubnetGroup
+      SecurityGroupIds:
+        - !GetAtt RedisSecurityGroup.GroupId
+      Port: 6379
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${ENV}-redis"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref ENV
+
+Outputs:
+  PrimaryEndpoint:
+    Description: Redis primary endpoint address
+    Value: !GetAtt RedisReplicationGroup.PrimaryEndPoint.Address
+    Export:
+      Name: !Sub "${ProjectName}-${ENV}-redis-primary-endpoint"
+  ReaderEndpoint:
+    Description: Redis reader endpoint address
+    Value: !GetAtt RedisReplicationGroup.ReaderEndPoint.Address
+    Export:
+      Name: !Sub "${ProjectName}-${ENV}-redis-reader-endpoint"

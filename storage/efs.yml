@@ -1,0 +1,86 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: EFS file system with encryption, mount targets across two AZs, and conditional throughput mode.
+
+Parameters:
+  ProjectName:
+    Type: String
+  ENV:
+    Type: String
+    AllowedValues:
+      - dev
+      - prod
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID for the security group
+  SubnetIdAZ1:
+    Type: AWS::EC2::Subnet::Id
+    Description: Subnet ID in the first availability zone
+  SubnetIdAZ2:
+    Type: AWS::EC2::Subnet::Id
+    Description: Subnet ID in the second availability zone
+
+Conditions:
+  IsProd: !Equals [!Ref ENV, "prod"]
+
+Resources:
+  EFSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${ProjectName}-${ENV}-efs-sg"
+      GroupDescription: !Sub "Security group for ${ProjectName}-${ENV} EFS"
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 2049
+          ToPort: 2049
+          CidrIp: 10.0.0.0/8
+          Description: Allow NFS access from internal network
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${ENV}-efs-sg"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref ENV
+
+  FileSystem:
+    Type: AWS::EFS::FileSystem
+    Properties:
+      Encrypted: true
+      PerformanceMode: generalPurpose
+      ThroughputMode: !If [IsProd, elastic, bursting]
+      FileSystemTags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${ENV}-efs"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref ENV
+
+  MountTargetAZ1:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref FileSystem
+      SubnetId: !Ref SubnetIdAZ1
+      SecurityGroups:
+        - !GetAtt EFSSecurityGroup.GroupId
+
+  MountTargetAZ2:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref FileSystem
+      SubnetId: !Ref SubnetIdAZ2
+      SecurityGroups:
+        - !GetAtt EFSSecurityGroup.GroupId
+
+Outputs:
+  FileSystemId:
+    Description: EFS file system ID
+    Value: !Ref FileSystem
+    Export:
+      Name: !Sub "${ProjectName}-${ENV}-efs-id"
+  FileSystemArn:
+    Description: EFS file system ARN
+    Value: !GetAtt FileSystem.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${ENV}-efs-arn"
